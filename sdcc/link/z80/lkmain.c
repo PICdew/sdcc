@@ -18,6 +18,13 @@
 #include <alloc.h>
 #include "aslink.h"
 
+#ifndef SDK_VERSION_STRING
+#define SDK_VERSION_STRING 	"3.0.0"
+#endif
+#ifndef TARGET_STRING
+#define TARGET_STRING		"gbz80"
+#endif
+
 /*)Module	lkmain.c
  *
  *	The module lkmain.c contains the functions which
@@ -135,7 +142,7 @@ int binary = 0;
 #ifdef GAMEBOY
 char *default_basep[] = {
   "_CODE=0x0200",
-  "_BSS=0xC0A0",
+  "_DATA=0xC0A0",
   NULL
 };
 
