@@ -22,16 +22,7 @@
    what you give them.   Help stamp out software-hoarding!  
 -------------------------------------------------------------------------*/
 
-#include <stdio.h>
-#include <string.h>
-#include "SDCCglobl.h"
-#include "SDCCast.h"
-#include "SDCCmem.h"
-#include "SDCCy.h"
-#include "SDCChasht.h"
-#include "SDCCicode.h"
-#include "SDCCopt.h"
-
+#include "common.h"
 
 int currLineno  = 0;
 set *astList = NULL ;
@@ -456,7 +447,7 @@ symbol *funcOfType (char *name, link *type, link *argType,
 		    int nArgs , int rent)
 {
     symbol *sym;    
-    	
+    int argStack = 0; 	
     /* create the symbol */
     sym = newSymbol (name,0);
 	
@@ -467,6 +458,7 @@ symbol *funcOfType (char *name, link *type, link *argType,
 	args = sym->args = newValue();
 
 	while (nArgs--) {
+	    argStack += getSize(type);
 	    args->type = copyLinkChain(argType);
 	    args->etype = getSpec(args->type);
 	    if (!nArgs)
@@ -485,6 +477,7 @@ symbol *funcOfType (char *name, link *type, link *argType,
     /* save it */
     addSymChain(sym);
     sym->cdef = 1;
+    sym->argStack = (rent ? argStack : 0);
     allocVariables (sym);
     return sym;
     
@@ -1524,7 +1517,7 @@ ast *decorateType (ast *tree)
 		  TTYPE(tree) = TETYPE(tree) =
 		    tree->opval.val->type = tree->opval.val->sym->type = 
 		    tree->opval.val->etype = tree->opval.val->sym->etype = 
-		    copyLinkChain(intType);
+		    copyLinkChain(INTTYPE);
 		}
 		else {
 		  
@@ -1770,7 +1763,10 @@ ast *decorateType (ast *tree)
 		    if (SPEC_SCLS(tree->left->etype) == S_IDATA)
 			DCL_TYPE(p) = IPOINTER ;
 		    else
-			DCL_TYPE(p) = POINTER ;
+			if (SPEC_SCLS(tree->left->etype) == S_FLASH)
+			    DCL_TYPE(p) = FLPOINTER ;
+			else
+			    DCL_TYPE(p) = POINTER ;
 
 	if (IS_AST_SYM_VALUE(tree->left)) {
 	    AST_SYMBOL(tree->left)->addrtaken = 1;
@@ -2782,7 +2778,7 @@ ast *backPatchLabels (ast *tree, symbol *trueLabel, symbol *falseLabel )
     
     /* change not */
     if (IS_NOT(tree)) {
-	tree->left = backPatchLabels (tree->left,trueLabel,falseLabel);
+	tree->left = backPatchLabels (tree->left,falseLabel,trueLabel);
 	
 	/* if the left is already a IFX */
 	if ( ! IS_IFX(tree->left) ) 
@@ -3085,7 +3081,7 @@ ast *createFor ( symbol *trueLabel, symbol *continueLabel ,
     /* vanilla for statement */
     condExpr = backPatchLabels(condExpr,trueLabel,falseLabel);
     
-    if (!IS_IFX(condExpr)) 
+    if (condExpr && !IS_IFX(condExpr)) 
 	condExpr = newIfxNode(condExpr,trueLabel,falseLabel);
     
     
@@ -3538,8 +3534,14 @@ ast  *createFunction   (symbol  *name,   ast  *body )
     processFuncArgs(currFunc,0);
     
     /* set the stack pointer */
-    stackPtr = -1 - (IS_ISR(name->etype)) - (IS_RENT(name->etype) | options.stackAuto);
-    xstackPtr= -1;
+    /* PENDING: check this for the mcs51 */
+    stackPtr = -port->stack.direction * port->stack.call_overhead;
+    if (IS_ISR(name->etype))
+	stackPtr -= port->stack.direction * port->stack.isr_overhead;
+    if (IS_RENT(name->etype) || options.stackAuto)
+	stackPtr -= port->stack.direction * port->stack.reent_overhead;
+
+    xstackPtr = -port->stack.direction * port->stack.call_overhead;
     
     fetype = getSpec(name->type); /* get the specifier for the function */
     /* if this is a reentrant function then */

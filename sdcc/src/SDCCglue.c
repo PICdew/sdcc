@@ -21,26 +21,17 @@
    You are forbidden to forbid anyone else to use, share and improve
    what you give them.   Help stamp out software-hoarding!  
 -------------------------------------------------------------------------*/
-#include <stdio.h>
-#include <string.h>
+
+#include "common.h"
 #include <time.h>
-#include "SDCCglobl.h"
-#include "SDCCsymt.h"
-#include "SDCCmem.h"
-#include "SDCCval.h"
-#include "SDCCast.h"
-#include "SDCChasht.h"
-#include "SDCCset.h"
-#include "SDCCicode.h"
-#include "SDCCopt.h"
-#include "SDCCy.h"
-#include "SDCCglue.h"
 
 symbol *interrupts[256];
-extern char *aopLiteral (value *, int);
+/*extern char *aopLiteral (value *, int);*//* drdani Jan 30 2000 */
 void printIval (symbol *, link *, initList *, FILE *);
 extern int noAlloc;
 set *publics = NULL;		/* public variables */
+
+/* TODO: this should be configurable (DS803C90 uses more than 6) */
 int maxInterrupts = 6;
 extern int maxRegBank ;
 symbol *mainf;
@@ -72,6 +63,39 @@ void copyFile (FILE * dest, FILE * src)
     while (!feof (src))
 	if ((ch = fgetc (src)) != EOF)
 	    fputc (ch, dest);
+}
+
+/*-----------------------------------------------------------------*/
+/* aopLiteral - string from a literal value                        */
+/*-----------------------------------------------------------------*/
+char *aopLiteral (value *val, int offset)
+{
+    char *rs;
+    union {
+        float f;
+        unsigned char c[4];
+    } fl;
+
+    /* if it is a float then it gets tricky */
+    /* otherwise it is fairly simple */
+    if (!IS_FLOAT(val->type)) {
+        unsigned long v = floatFromVal(val);
+
+        v >>= (offset * 8);
+        sprintf(buffer,"#0x%02x",((char) v) & 0xff);
+        ALLOC_ATOMIC(rs,strlen(buffer)+1);
+        return strcpy (rs,buffer);
+    }
+
+    /* it is type float */
+    fl.f = (float) floatFromVal(val);
+#ifdef _BIG_ENDIAN    
+    sprintf(buffer,"#0x%02x",fl.c[3-offset]);
+#else
+    sprintf(buffer,"#0x%02x",fl.c[offset]);
+#endif
+    ALLOC_ATOMIC(rs,strlen(buffer)+1);
+    return strcpy (rs,buffer);
 }
 
 /*-----------------------------------------------------------------*/
@@ -202,7 +226,10 @@ value *initPointer (initList *ilist)
 			if (SPEC_SCLS(expr->left->etype) == S_IDATA)
 			    DCL_TYPE(val->type) = IPOINTER ;
 			else
-			    DCL_TYPE(val->type) = POINTER ;
+			    if (SPEC_SCLS(expr->left->etype) == S_FLASH)
+				DCL_TYPE(val->type) = FLPOINTER ;
+			    else
+				DCL_TYPE(val->type) = POINTER ;
 	    val->type->next = expr->left->ftype;
 	    val->etype = getSpec(val->type);
 	    return val;
@@ -695,18 +722,27 @@ void createInterruptVect (FILE * vFile)
 	return;
     }
     
-    fprintf (vFile, "\t.area\tCODE (CODE)\n");
+    fprintf (vFile, "\t.area\t%s\n", CODE_NAME);
     fprintf (vFile, "__interrupt_vect:\n");
+
     
-    fprintf (vFile, "\tljmp\t__sdcc_gsinit_startup\n");
+    if (!port->genIVT || ! (port->genIVT(vFile, interrupts, maxInterrupts)))
+    {
+        /* "generic" interrupt table header (if port doesn't specify one).
+         *
+         * Look suspiciously like 8051 code to me...
+         */
+    
+    	fprintf (vFile, "\tljmp\t__sdcc_gsinit_startup\n");
     
     
-    /* now for the other interrupts */
-    for (; i < maxInterrupts; i++) {
-	if (interrupts[i])
-	    fprintf (vFile, "\tljmp\t%s\n\t.ds\t5\n", interrupts[i]->rname);
-	else
-	    fprintf (vFile, "\treti\n\t.ds\t7\n");
+    	/* now for the other interrupts */
+    	for (; i < maxInterrupts; i++) {
+		if (interrupts[i])
+	    		fprintf (vFile, "\tljmp\t%s\n\t.ds\t5\n", interrupts[i]->rname);
+		else
+	    		fprintf (vFile, "\treti\n\t.ds\t7\n");
+    	}
     }
 }
 
@@ -756,7 +792,7 @@ static void emitOverlay(FILE *afile)
     set *ovrset;
     
     if (!elementsInSet(ovrSetSets))
-	fprintf(afile,"\t.area\tOSEG\t(OVR,DATA)\n");
+	fprintf(afile,"\t.area\t%s\n", port->mem.overlay_name);
 
     /* for each of the sets in the overlay segment do */
     for (ovrset = setFirstItem(ovrSetSets); ovrset;
@@ -771,7 +807,7 @@ static void emitOverlay(FILE *afile)
 	       sad but true */
 	    fprintf(afile,"\t.area _DUMMY\n");
 	    /* output the area informtion */
-	    fprintf(afile,"\t.area\tOSEG\t(OVR,DATA)\n"); /* MOF */
+	    fprintf(afile,"\t.area\t%s\n", port->mem.overlay_name); /* MOF */
 	}
 	
 	for (sym = setFirstItem(ovrset); sym;
@@ -856,8 +892,13 @@ void glue ()
     if (options.debug)
 	cdbStructBlock (0,cdbFile);
 
-    /* create the interrupt vector table */
-    createInterruptVect ((vFile = tmpfile ()));
+    vFile = tmpfile();
+    /* PENDING: this isnt the best place but it will do */
+    if (port->general.glue_up_main) {
+	/* create the interrupt vector table */
+	createInterruptVect (vFile);
+    }
+
     addSetHead(&tmpfileSet,vFile);
     
     /* emit code for the all the variables declared */
@@ -867,8 +908,15 @@ void glue ()
 
     /* now put it all together into the assembler file */
     /* create the assembler file name */
-    sprintf (buffer, srcFileName);
-    strcat (buffer, ".asm");
+    
+    if (!options.c1mode) {
+	sprintf (buffer, srcFileName);
+	strcat (buffer, ".asm");
+    }
+    else {
+	strcpy(buffer, options.out_name);
+    }
+
     if (!(asmFile = fopen (buffer, "w"))) {
 	werror (E_FILE_OPEN_ERR, buffer);
 	exit (1);
@@ -880,9 +928,14 @@ void glue ()
     /* print module name */
     fprintf (asmFile, "\t.module %s\n", moduleName);
     
+    /* Let the port generate any global directives, etc. */
+    if (port->genAssemblerPreamble)
+    {
+    	port->genAssemblerPreamble(asmFile);
+    }
+    
     /* print the global variables in this module */
     printPublics (asmFile);
-
     
     /* copy the sfr segment */
     fprintf (asmFile, "%s", iComments2);
@@ -958,7 +1011,7 @@ void glue ()
     fprintf (asmFile, "%s", iComments2);
     fprintf (asmFile, "; global & static initialisations\n");
     fprintf (asmFile, "%s", iComments2);
-    fprintf (asmFile, "\t.area GSINIT (CODE)\n"); /* MOF */
+    fprintf (asmFile, "\t.area %s\n", port->mem.static_name); /* MOF */
     if (mainf && mainf->fbody) {
 	fprintf (asmFile,"__sdcc_gsinit_startup:\n");
 	/* if external stack is specified then the
@@ -991,12 +1044,15 @@ void glue ()
 	
     }
     copyFile (asmFile, statsg->oFile);
-    
+
+    if (port->general.glue_up_main && mainf && mainf->fbody)
+	fprintf (asmFile,"\tljmp\t__sdcc_program_startup\n");
+	
     /* copy over code */
     fprintf (asmFile, "%s", iComments2);
     fprintf (asmFile, "; code\n");
     fprintf (asmFile, "%s", iComments2);
-    fprintf (asmFile, "\t.area CSEG (CODE)\n");
+    fprintf (asmFile, "\t.area %s\n", port->mem.code_name);
     if (mainf && mainf->fbody) {
 	
 	/* entry point @ start of CSEG */

@@ -74,7 +74,8 @@ enum  { S_FIXED  =  0,
         S_LITERAL    ,
         S_STACK      ,
         S_XSTACK     ,
-        S_BIT        };
+        S_BIT        ,
+        S_FLASH      };
 
 /* specifier is the last in the type-chain */
 typedef struct specifier {
@@ -123,6 +124,7 @@ enum {  POINTER   = 0,       /* pointer to near data */
         PPOINTER     ,       /* paged area pointer   */
         IPOINTER     ,       /* pointer to upper 128 bytes */
 	UPOINTER     ,       /* unknown pointer used only when parsing */
+	FLPOINTER    ,       /* pointer to flash     */
         ARRAY        ,
         FUNCTION     };
 
@@ -228,6 +230,7 @@ typedef struct symbol {
     int      liveTo   ;            /* live to sequence number */    
     int      used     ;            /* no. of times this was used */
     int      recvSize ;            /* size of first argument  */
+    int      argStack ;            /* stacks used by parameters */
 
 } symbol ;
 
@@ -275,6 +278,7 @@ typedef struct symbol {
 			             DCL_TYPE(x) == GPOINTER   ||    \
 			             DCL_TYPE(x) == IPOINTER   ||    \
 			             DCL_TYPE(x) == PPOINTER   ||    \
+			             DCL_TYPE(x) == FLPOINTER  ||    \
                                      DCL_TYPE(x) == CPOINTER   ||    \
                                      DCL_TYPE(x) == UPOINTER  ))
 #define IS_PTR_CONST(x) (IS_PTR(x) && DCL_PTR_CONST(x))
@@ -326,38 +330,19 @@ extern symbol *__fslt  ;
 extern symbol *__fslteq;
 extern symbol *__fsgt  ;
 extern symbol *__fsgteq;
-extern symbol *__fs2uchar;
-extern symbol *__fs2uint ;
-extern symbol *__fs2ulong;
-extern symbol *__fs2char;
-extern symbol *__fs2int ;
-extern symbol *__fs2long;
-extern symbol *__long2fs;
-extern symbol *__ulong2fs;
-extern symbol *__int2fs;
-extern symbol *__uint2fs;
-extern symbol *__char2fs;
-extern symbol *__uchar2fs;
-extern symbol *__muluint;
-extern symbol *__mulsint;
-extern symbol *__divuint;
-extern symbol *__divsint;
-extern symbol *__mululong;
-extern symbol *__mulslong;
-extern symbol *__divulong;
-extern symbol *__divslong;
-extern symbol *__moduint;
-extern symbol *__modsint;
-extern symbol *__modulong;
-extern symbol *__modslong;
 
-extern link *charType ;
-extern link *intType  ;
+/* Dims: mul/div/mod, BYTE/WORD/DWORD, SIGNED/UNSIGNED */
+extern symbol *__muldiv[3][3][2];
+/* Dims: BYTE/WORD/DWORD SIGNED/UNSIGNED */
+extern link *__multypes[3][2];
+/* Dims: to/from float, BYTE/WORD/DWORD, SIGNED/USIGNED */
+extern symbol *__conv[2][3][2];
+
+#define CHARTYPE	__multypes[0][0]
+#define INTTYPE		__multypes[1][0]
+#define UCHARTYPE	__multypes[0][1]
+
 extern link *floatType;
-extern link *longType ;
-extern link *ucharType ;
-extern link *uintType  ;
-extern link *ulongType ;
 
 #include "SDCCval.h"
 
@@ -381,7 +366,6 @@ char        *genSymName       ( int                            );
 int          compStructSize   ( int    ,structdef *            );
 link        *copyLinkChain    ( link    *                      );
 int          checkDecl        ( symbol *                       );
-void         checkSClass      ( symbol   *                     );
 void         checkBasic       ( link   *, link  *              );
 value       *checkPointerIval ( link   *, value *              );
 value       *checkStructIval  ( symbol *, value *              );
